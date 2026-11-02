@@ -3,15 +3,33 @@
 pipeline {
     agent any
 
+    triggers {
+        // SCM webhook configuration is managed by Jenkins
+    }
+
     stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
         stage ('Prepare Environment') {
             steps {
-                prepareEnv()
+                script {
+                    def scmInfo = prepareEnv()
+
+                    echo "Pipeline triggered for commit: ${scmInfo.commitId}"
+                    echo "Code committed by: ${scmInfo.committer}"
+                }
             }
         }
 
         stage('Build') {
             steps {
+                echo "Building commit ${env.SCM_COMMIT_ID}"
+                echo "Committer: ${env.SCM_COMMITTER}"
+                
                 echo 'Building the Artifact...'
             }
 
