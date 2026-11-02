@@ -1,13 +1,75 @@
 #!/bin/bash
 #
-#
-#
-#
 
 VERBOSE=0
 RECURSIVE=0
 DECOMPRESSED=0
 NOT_DECOMPRESSED=0
+
+declare -A UNPACKERS=(
+    ["gzip compressed data"]=unpack_gunzip
+    ["bzip2 compressed data"]=unpack_bunzip2
+    ["Zip archive data"]=unpack_unzip
+    ["compress'd data"]=unpack_uncompress
+)
+
+stream_unpack() {
+    local f=$1 suffix=$2 out tmp base=${f##*/}
+    shift 2
+
+    # Determine output filename
+    if [[ $base == *"$suffix" && ${#base} -gt ${#suffix} ]]; then
+        out=${f%"$suffix"}
+    else
+        out="${f}.out"
+    fi
+
+    # Prevent invalid output paths
+    if [[ -d $out ]]; then
+        return 1
+    fi
+
+    tmp=$(mktemp "$(dirname -- "$f")/.extract.XXXXX") || return 1
+
+    # Decompress into temporary file
+    if "$@" < "$f" > "$tmp" 2>/dev/null; then
+        if ! mv -f -- "$tmp" "$out"; then
+            rm -f -- "$tmp"
+            return 1
+        fi
+
+        # Remove original archive after successful extraction
+        rm -f -- "$f"
+        return 0
+    fi
+
+    rm -f -- "$tmp"
+    return 1
+}
+
+unpack_gunzip() {
+    stream_unpack "$1" ".gz" gunzip -c
+}
+
+unpack_bunzip2() { 
+    stream_unpack "$1" ".bz2" bunzip2 -c 
+}
+
+unpack_uncompress() { 
+    stream_unpack  "$1" ".Z" uncompress -c
+}
+
+unpack_unzip() {
+    local f=$1
+
+    if unzip -o -q -- "$f" -d "$(dirname -- "$f")" >/dev/null 2>&1; then
+        rm -f -- "$f"
+        return 0
+    fi
+
+    return 1
+}
+
 
 help() {
     cat <<'EOF'
@@ -52,24 +114,78 @@ detect_type() {
     return 1
 }
 
-extract_file()
+extract_file() {
+    local f=$1 handler
+    handler=$(detect_type "$f")
+
+    if [[ -z $handler ]]; then
+        NOT_DECOMPRESSED=$((NOT_DECOMPRESSED + 1))
+        (( VERBOSE )) && echo "Warning: $f was not decompressed (not a supported archive)" >&2
+        return 1
+    fi
+
+    if "$handler" "$f"; then
+        DECOMPRESSED=$((DECOMPRESSED + 1))
+        (( VERBOSE )) && echo "Decompressed: $f"
+        return 0
+    fi
+
+    NOT_DECOMPRESSED=$((NOT_DECOMPRESSED + 1))
+    (( VERBOSE )) && echo "Warning: $f was not decompressed (unpacking failed)" >&2
+    return 1
+}
 
 process_directory() {
-    local dir=$1 depth=() f files=()
+    local dir=$1 depth=() f files=() list
+
     (( RECURSIVE )) || depth=(-maxdepth 1)
 
-    mapfile -d '' -t files < <(find "$dir" "${depth[@]}" -type f -print0)
+    list=$(mktemp) || return 1
+
+    if ! find "$dir" "${depth[@]}" -type f -print0 > "$list"; then
+        (( NOT_DECOMPRESSED++ ))
+        (( VERBOSE )) && echo "Warning: failed to scan $dir" >&2
+        rm -f -- "$list"
+        return 1
+    fi
+
+    mapfile -d '' -t files < "$list"
+    rm -f -- "$list"
+
     for f in "${files[@]}"; do
         extract_file "$f"
     done
 }
 
+check_dependencies() {
+    local cmd
+
+    for cmd in file gunzip bunzip2 unzip uncompress; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            echo "Error: required command '$cmd' is not installed" >&2
+            return 1
+        fi
+    done
+}
+
 main() {
+    check_dependencies || exit 255
+
+    local opt target
+    while getopts ":hrv" opt; do
+        case $opt in
+            h) help; exit 0 ;;
+            r) RECURSIVE=1 ;;
+            v) VERBOSE=1 ;;
+            *) echo "extract: invalid option -$OPTARG" >&2; help >&2; exit 255 ;;
+        esac
+    done
+    shift $((OPTIND - 1))
 
     if (( $# == 0 )); then
-    echo "extract error: no files given" >&2
-    help >&2
-    exit 255
+        echo "extract error: no files given" >&2
+        help >&2
+        exit 255
     fi
 
     for target in "$@"; do
@@ -79,7 +195,7 @@ main() {
             extract_file "$target"
         else 
             NOT_DECOMPRESSED=$((NOT_DECOMPRESSED + 1))
-            echo "Warning: $target does not exist or cannot be decompressed" >&2
+            (( VERBOSE )) && echo "Warning: $target does not exist" >&2
         fi
     done
 
