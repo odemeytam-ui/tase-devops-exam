@@ -1,0 +1,26 @@
+@Library('my-shared-library')
+
+pipeline {
+    agent any
+
+    stages {
+        stage ('Prepare Environment') {
+            steps {
+                prepareEnv()
+            }
+        }
+
+        stage('Build') {
+            steps {
+                echo 'Building the Artifact...'
+            }
+
+        }
+
+        stage('Package') {
+            steps {
+                sh 'zip -r artifact.zip app/'
+            }
+        }
+    }
+}
