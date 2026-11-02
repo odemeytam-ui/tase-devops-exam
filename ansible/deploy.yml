@@ -1,0 +1,59 @@
+---
+- name: Deploy Flask Counter Application with PostgreSQL
+  hosts: all
+  become: true
+  vars:
+    project_dir: "/opt/flask-postgres-app"
+
+  tasks:
+    - name: Ensure engine prerequisites are installed (Debian/Ubuntu)
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - python3-pip
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Ensure Docker and Docker Compose plugin are installed
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Ensure Docker engine is active and enabled
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Create isolated deployment directory
+      file:
+        path: "{{ project_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Push application configuration and code to target host
+      copy:
+        src: "{{ item }}"
+        dest: "{{ project_dir }}/{{ item }}"
+        mode: '0644'
+      loop:
+        - app.py
+        - requirements.txt
+        - Dockerfile
+        - docker-compose.yml
+
+    - name: Spin up multi-container docker-compose environment
+      community.docker.docker_compose_v2:
+        project_src: "{{ project_dir }}"
+        state: present
+        build: always
