@@ -57,30 +57,35 @@ pipeline {
                 sh '''
                     set -eu
 
-                    # Verify that Docker is available to Jenkins.
                     docker version
                     docker compose version
 
-                    # Create temporary credentials for the CI database.
                     export POSTGRES_DB=tase_ci
                     export POSTGRES_USER=postgres
                     export POSTGRES_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
                     export WEB_PORT=18080
-
                     export COMPOSE_PROJECT_NAME="tase-ci-${BUILD_NUMBER}"
 
-                    # Always clean up the temporary test environment.
                     cleanup() {
-                        docker compose -f ansible/compose.yaml --profile test down -v --remove-orphans
+                        docker compose -f ansible/compose.yaml down -v --remove-orphans
                     }
 
                     trap cleanup EXIT
 
-                    # Start PostgreSQL and wait for its health check.
-                    docker compose -f ansible/compose.yaml --profile test up -d db
+                    # Start the existing application and database services.
+                    docker compose -f ansible/compose.yaml up -d --build --wait db web
 
-                    # Build the test container and execute pytest.
-                    docker compose -f ansible/compose.yaml --profile test run --build --rm test
+                    # Copy the tests from Jenkins workspace into the running web container.
+                    WEB_CONTAINER=$(docker compose -f ansible/compose.yaml ps -q web)
+
+                    docker compose -f ansible/compose.yaml exec -T web mkdir -p /tmp/ci-tests
+                    docker cp tests/. "$WEB_CONTAINER:/tmp/ci-tests/"
+
+                    # Install test dependencies and execute pytest inside the web container.
+                    docker compose -f ansible/compose.yaml exec -T web sh -c "
+                        pip install --no-cache-dir -r /tmp/ci-tests/requirements.txt &&
+                        PYTHONPATH=/app python -m pytest -v /tmp/ci-tests
+                    "
                 '''
             }
         }
