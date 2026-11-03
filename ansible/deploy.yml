@@ -2,58 +2,131 @@
 - name: Deploy Flask Counter Application with PostgreSQL
   hosts: all
   become: true
+
   vars:
     project_dir: "/opt/flask-postgres-app"
+    docker_repository_os: "{{ 'ubuntu' if ansible_distribution == 'Ubuntu' else 'debian' }}"
+
+  pre_tasks:
+    - name: Check that the target operating system is supported
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution in ['Ubuntu', 'Debian']
+        fail_msg: "This playbook currently supports Ubuntu and Debian only."
+
+    - name: Check that the local environment file exists
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/.env"
+      delegate_to: localhost
+      become: false
+      register: local_env_file
+
+    - name: Require the local environment file
+      ansible.builtin.assert:
+        that:
+          - local_env_file.stat.exists
+        fail_msg: "Create ansible/.env before running this playbook."
 
   tasks:
-    - name: Ensure engine prerequisites are installed (Debian/Ubuntu)
-      apt:
+    # Install prerequisites.
+    - name: Install Docker repository prerequisites
+      ansible.builtin.apt:
         name:
-          - apt-transport-https
           - ca-certificates
           - curl
-          - gnupg
-          - lsb-release
-          - python3-pip
         state: present
-        update_cache: yes
-      when: ansible_os_family == "Debian"
+        update_cache: true
+        cache_valid_time: 3600
 
-    - name: Ensure Docker and Docker Compose plugin are installed
-      apt:
+    # Prepare Docker's official package repository.
+    - name: Create Docker keyring directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download Docker official GPG key
+      ansible.builtin.get_url:
+        url: "https://download.docker.com/linux/{{ docker_repository_os }}/gpg"
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Get target machine architecture
+      ansible.builtin.command:
+        cmd: dpkg --print-architecture
+      register: docker_arch
+      changed_when: false
+
+    - name: Add Docker official APT repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ docker_arch.stdout }}
+          signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/{{ docker_repository_os }}
+          {{ ansible_distribution_release }} stable
+        filename: docker
+        state: present
+
+    # Install Docker Engine and Compose.
+    - name: Install Docker Engine and Compose plugin
+      ansible.builtin.apt:
         name:
           - docker-ce
           - docker-ce-cli
           - containerd.io
+          - docker-buildx-plugin
           - docker-compose-plugin
         state: present
-      when: ansible_os_family == "Debian"
+        update_cache: true
 
-    - name: Ensure Docker engine is active and enabled
-      service:
+    - name: Ensure Docker is running
+      ansible.builtin.service:
         name: docker
         state: started
-        enabled: yes
+        enabled: true
 
-    - name: Create isolated deployment directory
-      file:
-        path: "{{ project_dir }}"
+    # Create the same directory structure as the repository.
+    - name: Create application and Ansible directories
+      ansible.builtin.file:
+        path: "{{ item }}"
         state: directory
-        mode: '0755'
-
-    - name: Push application configuration and code to target host
-      copy:
-        src: "{{ item }}"
-        dest: "{{ project_dir }}/{{ item }}"
-        mode: '0644'
+        mode: "0755"
       loop:
-        - app/app.py
-        - app/requirements.txt
-        - app/dockerfile
-        - ansible/compose.yaml
+        - "{{ project_dir }}/app"
+        - "{{ project_dir }}/ansible"
 
-    - name: Spin up multi-container docker-compose environment
+    # Copy the application files.
+    - name: Copy Flask application files
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../app/{{ item }}"
+        dest: "{{ project_dir }}/app/{{ item }}"
+        mode: "0644"
+      loop:
+        - app.py
+        - requirements.txt
+        - dockerfile
+
+    # Copy Docker Compose configuration.
+    - name: Copy Compose configuration
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/compose.yaml"
+        dest: "{{ project_dir }}/ansible/compose.yaml"
+        mode: "0644"
+
+    # Copy secrets securely.
+    - name: Copy environment variables
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/.env"
+        dest: "{{ project_dir }}/ansible/.env"
+        mode: "0600"
+      no_log: true
+
+    # Start the application and database.
+    - name: Start application using Docker Compose
       community.docker.docker_compose_v2:
-        project_src: "{{ project_dir }}"
+        project_src: "{{ project_dir }}/ansible"
         state: present
         build: always
+        pull: missing
+        wait: true
+        wait_timeout: 120
