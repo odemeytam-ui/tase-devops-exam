@@ -121,6 +121,12 @@
         mode: "0600"
       no_log: true
 
+    - name: Validate Docker Compose configuration
+      ansible.builtin.command:
+        cmd: docker compose config --quiet
+        chdir: "{{ project_dir }}/ansible"
+      changed_when: false
+
     # Start the application and database.
     - name: Start application using Docker Compose
       community.docker.docker_compose_v2:
@@ -130,3 +136,14 @@
         pull: missing
         wait: true
         wait_timeout: 120
+
+    # Verify that the application is responding.
+    - name: Verify application health endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ web_port | default(8080) }}/health"
+        method: GET
+        status_code: 200
+      register: health_check
+      retries: 10
+      delay: 5
+      until: health_check.status == 200
