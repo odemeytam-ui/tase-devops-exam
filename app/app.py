@@ -1,55 +1,107 @@
+import os
+
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-import os
+from sqlalchemy import URL, text, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 
 app = Flask(__name__)
 
-# Fetch database configuration from environment variables
-DB_USER = os.getenv("POSTGRES_USER", "postgres")
-DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "secret")
-DB_HOST = os.getenv("POSTGRES_HOST", "db")
-DB_NAME = os.getenv("POSTGRES_DB", "flask_db")
+# Read database configuration from environment variables.
+# The password is required; there is no hardcoded fallback.
+db_password = os.getenv("POSTGRES_PASSWORD")
 
-app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+if not db_password:
+    raise RuntimeError("POSTGRES_PASSWORD environment variable is required")
+
+database_url = URL.create(
+    drivername="postgresql+psycopg2",
+    username=os.getenv("POSTGRES_USER", "postgres"),
+    password=db_password,
+    host=os.getenv("POSTGRES_HOST", "db"),
+    port=int(os.getenv("POSTGRES_PORT", "5432")),
+    database=os.getenv("POSTGRES_DB", "flask_db"),
+)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = database_url
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
 
 db = SQLAlchemy(app)
 
-# Define a simple counter model
+
+# Database model
 class HitCounter(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    count = db.Column(db.Integer, default=0, nullable=False)
+    count = db.Column(db.Integer, nullable=False, default=0)
 
-# Ensure database tables exist
-with app.app_context():
-    db.create_all()
-    # Initialize the counter row if empty
-    if not HitCounter.query.first():
-        db.session.add(HitCounter(id=1, count=0))
+
+# Create the table and initialize the counter if it doesn't exist.
+def initialize_database():
+    with app.app_context():
+        db.create_all()
+
+        # Prevent duplicate counter rows if multiple workers start together.
+        statement = (
+            insert(HitCounter)
+            .values(id=1, count=0)
+            .on_conflict_do_nothing(index_elements=[HitCounter.id])
+        )
+
+        db.session.execute(statement)
         db.session.commit()
 
-@app.route('/')
+
+initialize_database()
+
+
+# Health endpoint used by Docker to check the application and database.
+@app.route("/health")
+def health():
+    try:
+        db.session.execute(text("SELECT 1"))
+        return {"status": "ok"}, 200
+
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Database health check failed")
+        return {"status": "database_unavailable"}, 503
+
+
+# Main application page.
+@app.route("/")
 def hello():
     try:
-        # Atomic increment inside a transaction block
-        counter = db.session.with_for_update().get(HitCounter, 1)
-        counter.count += 1
-        db.session.commit()
-        hits = counter.count
-    except Exception as e:
-        db.session.rollback()
-        hits = "Database currently unavailable"
+        # Increment the counter atomically in the database.
+        statement = (
+            update(HitCounter)
+            .where(HitCounter.id == 1)
+            .values(count=HitCounter.count + 1)
+            .returning(HitCounter.count)
+        )
 
-    return f'''
+        hits = db.session.execute(statement).scalar_one()
+        db.session.commit()
+
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Could not update page counter")
+        return "<h1>Database currently unavailable</h1>", 503
+
+    return f"""
     <!DOCTYPE html>
     <html>
-    <head><title>Hello World</title></head>
+    <head>
+        <title>Hello World</title>
+    </head>
     <body style="font-family: Arial, sans-serif; text-align: center; margin-top: 50px;">
         <h1>Hello World!</h1>
         <p>This page has been viewed <strong>{hits}</strong> times.</p>
     </body>
     </html>
-    '''
+    """
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
