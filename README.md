@@ -106,13 +106,6 @@ The tests are in [`tests/test_app.py`](tests/test_app.py). They verify:
 2. The homepage returns HTTP 200 and contains `Hello World!`.
 3. Each homepage request increments the page-view counter by exactly one.
 
-Run the tests from the repository root:
-
-```bash
-cd ansible
-docker compose --profile test run --build --rm test
-```
-
 The test service uses the same application image and starts PostgreSQL as a dependency. It installs the packages listed in `tests/requirements.txt` and runs `pytest` inside the container. The three tests passed in the local verification run.
 
 ## Jenkins CI pipeline

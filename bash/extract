@@ -76,9 +76,9 @@ help() {
 Usage: extract [-h] [-r] [-v] file [file...]
 
 Unpacks compressed files according to their real type (as reported by the
-`file` command), ignoring file names and extensions. Files are unpacked into
-their own folder; existing files are overwritten. Uncompressed files are
-left untouched.
+`file` command), ignoring file names and extensions. Extracted files are
+written alongside the archive; existing files may be overwritten.
+Uncompressed files are left untouched.
 
 Supported: gzip, bzip2, zip, compress (.Z)
 
