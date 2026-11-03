@@ -3,14 +3,16 @@
 pipeline {
     agent any
 
-    triggers {
-        // SCM webhook configuration is managed by Jenkins
+    options {
+        timestamps()
     }
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
+                echo 'Source code checked out successfully.'
+
             }
         }
 
@@ -19,26 +21,60 @@ pipeline {
                 script {
                     def scmInfo = prepareEnv()
 
-                    echo "Pipeline triggered for commit: ${scmInfo.commitId}"
-                    echo "Code committed by: ${scmInfo.committer}"
+                    echo "Commit ID: ${scmInfo.commitId}"
+                    echo "Committer: ${scmInfo.committer}"
+                    echo "Commit message: ${scmInfo.commitMessage}"
                 }
             }
         }
 
         stage('Build') {
             steps {
-                echo "Building commit ${env.SCM_COMMIT_ID}"
-                echo "Committer: ${env.SCM_COMMITTER}"
-                
-                echo 'Building the Artifact...'
+                echo 'Building application...'
+
+                sh '''
+                    set -e
+
+                    echo "Checking application files..."
+
+                    test -f app/app.py
+                    test -f app/requirements.txt
+                    test -f app/dockerfile
+
+                    echo "Compiling Python application..."
+
+                    python -m compileall -q app
+
+                    echo "Build completed successfully."
+                '''         
             }
 
         }
 
         stage('Package') {
             steps {
-                sh 'zip -r artifact.zip app/'
+                echo 'Packaging application artifact...'
+
+                sh '''
+                    set -e
+                    
+                    rm -f artifact.zip
+                    zip -r artifact.zip app/ 
+
+                    echo "Artifact packaged successfully."
+                '''
+
+                archiveArtifacts artifacts: 'artifact.zip', fingerprint: true
             }
         }
     }
-}
+
+    post {
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+
+        faliure {
+            echo 'Pipeline failed. Please check the build logs.'
+        }
+    }

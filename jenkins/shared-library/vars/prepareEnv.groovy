@@ -1,4 +1,3 @@
-
 def call() {
     echo "Preparing pipeline environment..."
 
