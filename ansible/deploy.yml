@@ -47,10 +47,10 @@
         dest: "{{ project_dir }}/{{ item }}"
         mode: '0644'
       loop:
-        - app.py
-        - requirements.txt
-        - Dockerfile
-        - docker-compose.yml
+        - app/app.py
+        - app/requirements.txt
+        - app/dockerfile
+        - ansible/compose.yaml
 
     - name: Spin up multi-container docker-compose environment
       community.docker.docker_compose_v2:
