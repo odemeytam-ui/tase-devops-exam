@@ -124,7 +124,7 @@ The pipeline is defined in [`jenkins/jenkinsfile`](jenkins/jenkinsfile) and uses
 | **Checkout** | Checks out the repository using the job's SCM configuration |
 | **Prepare Environment** | Calls `prepareEnv()` to collect the current commit ID, committer, email, and commit message |
 | **Build** | Checks that required application and test files exist, then validates Python syntax with `compileall` |
-| **Test** | Checks Docker and Compose availability, starts a temporary PostgreSQL service, and runs the integration tests |
+| **Test** | Starts the application and PostgreSQL containers, copies tests into the existing Flask container, and executes pytest |
 | **Package** | Creates `artifact.zip` from `app/` and archives it in Jenkins with fingerprinting |
 
 The Test stage generates a temporary database password and uses a unique Compose project name for each build. A shell trap runs Compose cleanup when the test stage exits, including when it fails.
