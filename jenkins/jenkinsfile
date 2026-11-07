@@ -136,6 +136,7 @@ pipeline {
 
                         REPOSITORY="odemeytam-ui/tase-devops-exam"
                         RELEASE_TAG="jenkins-${BUILD_NUMBER}"
+                        export RELEASE_TAG
 
                         # Create the release request
                         RELEASE_JSON=$(python3 -c '
