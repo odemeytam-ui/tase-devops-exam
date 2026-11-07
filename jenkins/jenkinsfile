@@ -113,7 +113,7 @@ pipeline {
                     set -eu
 
                     rm -f artifact.zip
-                    zip -r artifact.zip app/
+                    zip -r artifact.zip app/ -x '*/__pycache__/*' '*.pyc'
 
                     test -s artifact.zip
 

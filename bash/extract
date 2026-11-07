@@ -169,8 +169,6 @@ check_dependencies() {
 }
 
 main() {
-    check_dependencies || exit 255
-
     local opt target
     while getopts ":hrv" opt; do
         case $opt in
@@ -187,6 +185,8 @@ main() {
         help >&2
         exit 255
     fi
+
+    check_dependencies || exit 255
 
     for target in "$@"; do
         if [[ -d $target ]]; then
