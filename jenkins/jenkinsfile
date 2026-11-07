@@ -45,6 +45,17 @@ pipeline {
 
                     python3 -m compileall -q app tests
 
+                    docker version
+                    docker compose version
+
+                    export POSTGRES_DB=tase_ci
+                    export POSTGRES_USER=postgres
+                    export POSTGRES_PASSWORD=build-only-placeholder
+                    export WEB_PORT=18080
+                    export COMPOSE_PROJECT_NAME="tase-ci-${BUILD_NUMBER}"
+
+                    docker compose -f ansible/compose.yaml build web
+
                     echo "Build completed successfully."
                 '''
             }
@@ -57,9 +68,6 @@ pipeline {
                 sh '''
                     set -eu
 
-                    docker version
-                    docker compose version
-
                     export POSTGRES_DB=tase_ci
                     export POSTGRES_USER=postgres
                     export POSTGRES_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
@@ -67,18 +75,25 @@ pipeline {
                     export COMPOSE_PROJECT_NAME="tase-ci-${BUILD_NUMBER}"
 
                     cleanup() {
-                        docker compose -f ansible/compose.yaml down -v --remove-orphans
+                        status=$?
+                        docker compose -f ansible/compose.yaml down -v --remove-orphans || true
+                        exit "$status"
                     }
 
                     trap cleanup EXIT
 
-                    # Start the existing application and database services.
-                    docker compose -f ansible/compose.yaml up -d --build --wait db web
+                    # Start PostgreSQL and the previously built Flask image
+                    docker compose -f ansible/compose.yaml up -d --no-build --wait db web
 
-                    # Copy the tests from Jenkins workspace into the running web container.
+                    # Get the running Flask container ID
                     WEB_CONTAINER=$(docker compose -f ansible/compose.yaml ps -q web)
 
+                    test -n "$WEB_CONTAINER"
+
+                    # Create a directory for the tests inside Flask
                     docker compose -f ansible/compose.yaml exec -T web mkdir -p /tmp/ci-tests
+                    
+                    # Copy the tests from Jenkins workspace into Flask
                     docker cp tests/. "$WEB_CONTAINER:/tmp/ci-tests/"
 
                     # Install test dependencies and execute pytest inside the web container.
