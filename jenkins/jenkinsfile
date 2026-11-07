@@ -123,6 +123,60 @@ pipeline {
                 archiveArtifacts artifacts: 'artifact.zip', fingerprint: true
             }
         }
+
+        stage('Upload to GitHub Release') {
+            steps {
+                echo 'Uploading artifact to GitHub...'
+
+                withCredentials([
+                    string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')
+                ]) {
+                    sh '''
+                        set -eu
+
+                        REPOSITORY="odemeytam-ui/tase-devops-exam"
+                        RELEASE_TAG="jenkins-${BUILD_NUMBER}"
+
+                        # Create the release request
+                        RELEASE_JSON=$(python3 -c '
+import json, os
+print(json.dumps({
+    "tag_name": os.environ["RELEASE_TAG"],
+    "name": "Jenkins Build " + os.environ["BUILD_NUMBER"],
+    "body": "Automated release created by Jenkins.",
+    "target_commitish": os.environ.get("GIT_COMMIT") or "main"
+}))
+')
+
+                        # Create a GitHub Release
+                        RESPONSE=$(curl -fsS -X POST \
+                            "https://api.github.com/repos/${REPOSITORY}/releases" \
+                            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                            -H "Accept: application/vnd.github+json" \
+                            -H "X-GitHub-Api-Version: 2022-11-28" \
+                            -H "Content-Type: application/json" \
+                            -d "$RELEASE_JSON")
+
+                        # Extract the release ID from GitHub's response
+                        RELEASE_ID=$(printf '%s' "$RESPONSE" | python3 -c '
+import json, sys
+print(json.load(sys.stdin)["id"])
+')
+
+                        # Upload artifact.zip to the release
+                        curl -fsS -X POST \
+                            "https://uploads.github.com/repos/${REPOSITORY}/releases/${RELEASE_ID}/assets?name=artifact.zip" \
+                            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                            -H "Accept: application/vnd.github+json" \
+                            -H "Content-Type: application/zip" \
+                            --data-binary @artifact.zip
+
+                        echo "Artifact uploaded successfully!"
+                        echo "Release tag: ${RELEASE_TAG}"
+                    '''
+                }
+            }
+        }
     }
 
     post {
