@@ -1,251 +1,301 @@
-# tase-devops-exam
+# TASE DevOps Exam
 
-A small **Flask + PostgreSQL** application used to demonstrate an end-to-end DevOps workflow. The homepage displays a `Hello World` message and a page-view counter. Each visit increments the counter in PostgreSQL, so the value survives application and container restarts.
+This repository contains the implementation of the DevOps assignment. It
+brings together a Jenkins CI/CD pipeline, a Groovy Shared Library, an
+Ansible-managed Docker Compose deployment, a small Flask application
+backed by PostgreSQL, and a Bash archive-extraction utility.
 
-The repository brings together **Docker and Docker Compose** for containerization, **Jenkins** for continuous integration and artifact packaging, **Ansible** for deployment to a remote Debian/Ubuntu host, and a **Bash** utility for extracting compressed archives.
+## Repository contents
 
-| | Result |
-|---|---|
-| Application | Flask web application backed by PostgreSQL 16 |
-| Container setup | Docker image for the app; Compose services for the app and database |
-| Automated tests | **3 tests** covering the health endpoint, homepage, and persistent page counter |
-| CI pipeline | **5 stages**: Checkout, Prepare Environment, Build, Test, Package |
-| Artifact | `artifact.zip`, archived by Jenkins with fingerprinting |
-| Deployment | Ansible playbook installs Docker, copies the application, starts Compose, and checks `/health` |
-
-## Repository layout
-
-```text
-tase-devops-exam/
+``` text
+.
 ├── app/
 │   ├── app.py
-│   ├── dockerfile
-│   └── requirements.txt
+│   ├── requirements.txt
+│   └── dockerfile
 ├── ansible/
 │   ├── compose.yaml
 │   ├── deploy.yml
-│   └── requirements.yml
+│   ├── requirements.yml
+│   └── .env.example
 ├── bash/
 │   └── extract
 ├── jenkins/
-│   ├── controller/
-│   │   ├── Dockerfile
-│   │   └── docker-compose.yaml
 │   ├── jenkinsfile
 │   └── shared-library/
 │       └── vars/
 │           └── prepareEnv.groovy
-├── tests/
-│   ├── requirements.txt
-│   └── test_app.py
-├── .gitignore
-└── README.md
+└── tests/
+    ├── requirements.txt
+    └── test_app.py
 ```
 
-The local environment file (`ansible/.env`) and the Ansible inventory (`ansible/inventory.ini`) are configuration files created on the machine running the project; they should not be committed to the repository.
+## 1. Application
 
-## Build and run locally
+The application is a small Flask web server connected to PostgreSQL.
 
-Requirements: Docker Engine or Docker Desktop with the Docker Compose plugin. The commands below are run from the repository root unless stated otherwise.
+-   `GET /` displays a Hello World page and increments the hit counter.
+-   `GET /health` checks the application's database connection.
+-   The hit counter is stored in PostgreSQL, so it survives
+    application/container restarts when the database volume is retained.
+-   The counter update is performed atomically in the database.
 
-### 1. Configure the environment
+The application dependencies are listed in `app/requirements.txt`. The
+Docker image is built from `app/dockerfile`.
 
-Create `ansible/.env` with the database settings and the host port for the web application:
+## 2. Docker Compose
 
-```dotenv
+The Compose configuration is in `ansible/compose.yaml` and defines two
+services:
+
+  Service   Purpose
+  --------- ---------------------------------------------
+  `web`     Builds and runs the Flask application
+  `db`      Runs PostgreSQL and stores application data
+
+The web service waits for the database health check before starting.
+PostgreSQL uses a named Docker volume for persistent data.
+
+### Configure environment variables
+
+Create the local environment file from the example:
+
+``` bash
+cp ansible/.env.example ansible/.env
+```
+
+Edit `ansible/.env` and set a strong password for `POSTGRES_PASSWORD`.
+
+The example file contains these settings:
+
+``` dotenv
 POSTGRES_DB=flask_db
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=replace-with-a-strong-password
 WEB_PORT=8080
 ```
 
-`WEB_PORT` is the port exposed on the host. The default is `8080`; the application listens on port `5000` inside the container. Keep the real `.env` file out of Git.
+Keep `ansible/.env` private. It contains deployment configuration and
+should not be committed to Git. The `.env.example` file is safe to
+commit because it contains a placeholder password.
 
-### 2. Build and start the application
+### Run with Docker Compose
 
-```bash
-cd ansible
-docker compose up -d --build
+From the repository root:
+
+``` bash
+docker compose --env-file ansible/.env -f ansible/compose.yaml up -d --build
 ```
 
-Open the application at `http://localhost:8080` (or the port configured in `WEB_PORT`). Refreshing the page increments the counter stored in PostgreSQL.
+Open the application at:
 
-### 3. Check application health
-
-```bash
-curl http://localhost:8080/health
+``` text
+http://localhost:5000
 ```
 
-Expected response:
+Check its health endpoint:
 
-```json
-{"status":"ok"}
+``` text
+http://localhost:5000/health
 ```
 
-The Compose configuration waits for PostgreSQL's health check before starting the web application. The web container also has a health check that calls the Flask `/health` endpoint.
+To stop the services:
 
-### 4. Stop the application
-
-```bash
-docker compose down
+``` bash
+docker compose --env-file ansible/.env -f ansible/compose.yaml down
 ```
 
-To remove the PostgreSQL data volume as well:
+To also remove the PostgreSQL data volume (this permanently deletes the
+stored counter and database data):
 
-```bash
-docker compose down -v
+``` bash
+docker compose --env-file ansible/.env -f ansible/compose.yaml down -v
 ```
 
-**Warning:** `down -v` deletes the stored page counter and all other data in the Compose PostgreSQL volume.
+If you change `WEB_PORT` in `ansible/.env`, use the corresponding port
+when opening the application.
 
-## Automated tests
+## 3. Ansible deployment
 
-The tests are in [`tests/test_app.py`](tests/test_app.py). They verify:
+The playbook `ansible/deploy.yml` automates deployment to an
+Ubuntu/Debian target host.
 
-1. `/health` returns HTTP 200 and `{"status":"ok"}` when the application can query PostgreSQL.
-2. The homepage returns HTTP 200 and contains `Hello World!`.
-3. Each homepage request increments the page-view counter by exactly one.
+It: 1. Checks that the local `ansible/.env` file exists. 2. Configures
+the official Docker package repository and installs Docker Engine and
+the Compose plugin. 3. Creates the application directories on the
+target. 4. Copies the application, Compose configuration, and
+environment file to the target. 5. Validates the Compose configuration.
+6. Deploys the services with the Docker Compose Ansible collection. 7.
+Checks the application's `/health` endpoint.
 
-The test service uses the same application image and starts PostgreSQL as a dependency. It installs the packages listed in `tests/requirements.txt` and runs `pytest` inside the container. The three tests passed in the local verification run.
+### Install Ansible dependencies
 
-## Jenkins CI pipeline
+Install Ansible on the machine from which you will run the playbook,
+then install the required collection:
 
-The pipeline is defined in [`jenkins/jenkinsfile`](jenkins/jenkinsfile) and uses the `my-shared-library` Jenkins Shared Library.
-
-| Stage | What it does |
-|---|---|
-| **Checkout** | Checks out the repository using the job's SCM configuration |
-| **Prepare Environment** | Calls `prepareEnv()` to collect the current commit ID, committer, email, and commit message |
-| **Build** | Checks that required application and test files exist, then validates Python syntax with `compileall` |
-| **Test** | Starts the application and PostgreSQL containers, copies tests into the existing Flask container, and executes pytest |
-| **Package** | Creates `artifact.zip` from `app/` and archives it in Jenkins with fingerprinting |
-
-The Test stage generates a temporary database password and uses a unique Compose project name for each build. A shell trap runs Compose cleanup when the test stage exits, including when it fails.
-
-The pipeline also polls the configured SCM repository using:
-
-```groovy
-pollSCM('H/2 * * * *')
-```
-
-This checks for changes approximately every two minutes; Jenkins may schedule the actual check within its polling interval.
-
-### Jenkins Shared Library
-
-The shared-library function is [`jenkins/shared-library/vars/prepareEnv.groovy`](jenkins/shared-library/vars/prepareEnv.groovy). It gathers Git metadata and returns it as a map for the pipeline to use.
-
-Configure a **Global Pipeline Library** in Jenkins with these values:
-
-| Setting | Value |
-|---|---|
-| Name | `my-shared-library` |
-| Default version | `main` |
-| Retrieval method | Modern SCM |
-| SCM | Git |
-| Repository URL | `https://github.com/odemeytam-ui/tase-devops-exam.git` |
-| Library path | `jenkins/shared-library` |
-
-Create a Pipeline job using **Pipeline script from SCM**:
-
-| Setting | Value |
-|---|---|
-| SCM | Git |
-| Repository URL | `https://github.com/odemeytam-ui/tase-devops-exam.git` |
-| Branch specifier | `*/main` |
-| Script path | `jenkins/jenkinsfile` |
-
-### Run the Jenkins controller with Docker Compose
-
-The controller definition is in [`jenkins/controller/docker-compose.yaml`](jenkins/controller/docker-compose.yaml). From the repository root:
-
-```bash
-cd jenkins/controller
-docker compose up -d --build
-```
-
-Open Jenkins at `http://localhost:8081`. The Compose configuration stores Jenkins data in the named `jenkins_home` volume and exposes the inbound-agent port `50000`.
-
-The controller mounts `/var/run/docker.sock` so pipeline jobs can use the host's Docker engine. This grants Jenkins powerful access to the Docker host; use this configuration only in a trusted environment and do not expose the Jenkins controller publicly without additional security controls.
-
-## Ansible deployment
-
-The deployment playbook is [`ansible/deploy.yml`](ansible/deploy.yml). It currently supports **Debian and Ubuntu** targets and performs the following tasks:
-
-- Checks the target operating system and verifies that the local `ansible/.env` file exists.
-- Adds Docker's official APT repository and installs Docker Engine, Buildx, and the Compose plugin.
-- Creates `/opt/flask-postgres-app/` on the target host.
-- Copies the Flask application, Compose file, and environment file to the target.
-- Starts the application stack and waits for the services.
-- Checks that the application's `/health` endpoint returns HTTP 200.
-
-Install the collection used by the playbook:
-
-```bash
+``` bash
 ansible-galaxy collection install -r ansible/requirements.yml
 ```
 
-Create `ansible/inventory.ini` on the Ansible control machine. Replace the example address and SSH user with the details of your target host:
+### Run the playbook
 
-```ini
-[app_servers]
-app-host ansible_host=192.0.2.10 ansible_user=ubuntu
+Configure an Ansible inventory for your target host and make sure SSH
+access and privilege escalation are configured. Then run:
+
+``` bash
+ansible-playbook -i <your-inventory-file> ansible/deploy.yml
 ```
 
-Make sure SSH access and privilege escalation are configured for the target. Then run the playbook from the repository root:
+Replace `<your-inventory-file>` with the path to your inventory.
 
-```bash
-ansible-playbook -i ansible/inventory.ini ansible/deploy.yml
+The playbook expects `ansible/.env` to exist on the machine running
+Ansible. The file is copied to the target with restricted permissions.
+
+## 4. Jenkins CI/CD pipeline
+
+The pipeline is defined in `jenkins/jenkinsfile`. It uses the Groovy
+Shared Library function `prepareEnv`, located at:
+
+``` text
+jenkins/shared-library/vars/prepareEnv.groovy
 ```
 
-The playbook's health-check port defaults to `8080`. If `WEB_PORT` in `ansible/.env` is different, pass the same port to Ansible. For example, when `WEB_PORT=5000`:
+The Jenkinsfile loads the library using:
 
-```bash
-ansible-playbook -i ansible/inventory.ini ansible/deploy.yml -e "web_port=5000"
+``` groovy
+@Library('my-shared-library') _
 ```
 
-The playbook copies the environment file to the remote host with file mode `0600` and suppresses that task's output with `no_log`.
+Configure a Jenkins Global Pipeline Library named `my-shared-library`
+and point its SCM configuration to this repository. The library root
+should be `jenkins/shared-library`, so Jenkins can find the
+`vars/prepareEnv.groovy` global variable.
 
-## Bash archive extraction utility
+### Pipeline stages
 
-The utility is [`bash/extract`](bash/extract). It detects archive formats using the `file` command rather than relying only on file extensions. Supported formats are:
+1.  **Checkout** -- checks out the repository.
+2.  **Prepare Environment** -- calls `prepareEnv()` to collect the
+    checked-out commit ID, committer name, committer email, and commit
+    message. The function exposes these values through environment
+    variables and returns them to the pipeline.
+3.  **Build** -- validates required application/test files, compiles the
+    Python files, checks Docker/Compose availability, and builds the web
+    image.
+4.  **Test** -- starts PostgreSQL and the web service, runs the
+    integration tests inside the web container, and cleans up the test
+    containers and volume.
+5.  **Package** -- creates `artifact.zip` from the application files,
+    excluding Python cache files, and archives it in Jenkins.
+6.  **Upload to GitHub Release** -- creates a GitHub Release for the
+    build and uploads `artifact.zip` as a release asset.
 
-- gzip
-- bzip2
-- ZIP
-- compress (`.Z`)
+### Trigger
 
-Show its built-in help:
+The Jenkinsfile uses `pollSCM('H/2 * * * *')` to check the SCM
+repository for changes approximately every two minutes, using Jenkins'
+hashed schedule.
 
-```bash
+### Jenkins configuration requirements
+
+The Jenkins environment needs: - Access to this Git repository. - Python
+3 and the tools used by the pipeline, including Docker CLI, Docker
+Compose, `zip`, and `curl`. - Docker access so the pipeline can build
+and run containers. - A Jenkins **Secret text** credential with ID
+`github-token`, containing a GitHub token that has permission to create
+releases and upload release assets to this repository. - The Shared
+Library configured as described above.
+
+The GitHub token is read from Jenkins Credentials at runtime; it should
+never be hard-coded in the Jenkinsfile or committed to the repository.
+
+## 5. Integration tests
+
+The tests are in `tests/test_app.py` and cover:
+
+-   The health endpoint.
+-   The Hello World response.
+-   The hit counter incrementing between requests.
+
+Install the test dependencies with:
+
+``` bash
+python3 -m pip install -r tests/requirements.txt
+```
+
+The integration tests expect the application and its PostgreSQL database
+to be running and configured. The Jenkins pipeline starts the required
+services before executing them.
+
+## 6. Bash archive extraction utility
+
+The script is located at `bash/extract`.
+
+It identifies archive formats using the `file` command rather than
+relying on file extensions. It supports:
+
+-   gzip
+-   bzip2
+-   ZIP
+-   compress (`.Z`)
+
+It accepts multiple files and directories, can recursively traverse
+directories, overwrites existing extracted files, and leaves unsupported
+or uncompressed files untouched. It reports the number of successfully
+decompressed archives and returns the number of files that were not
+decompressed as its exit status.
+
+### Usage
+
+``` text
+extract [-h] [-r] [-v] file [file...]
+```
+
+Options:
+
+-   `-h` --- display help.
+-   `-r` --- recursively process directories.
+-   `-v` --- print each successfully decompressed file and warn about
+    files that could not be decompressed.
+
+Examples:
+
+``` bash
+./bash/extract archive.tar.gz
+./bash/extract -v first.gz second.zip
+./bash/extract -r ./archives
 ./bash/extract -h
 ```
 
-Use `-r` to search directories recursively and `-v` for verbose output. For example:
-
-```bash
-./bash/extract -v ./downloads
-./bash/extract -r -v ./archive-folder
-```
-
-The script requires `file`, `gunzip`, `bunzip2`, `unzip`, and `uncompress` to be installed.
+The script requires Bash and the relevant system utilities (`file`,
+`gunzip`, `bunzip2`, `unzip`, and `uncompress`).
 
 ## Security and configuration notes
 
-- The Flask application requires `POSTGRES_PASSWORD` from the environment; it has no hard-coded password fallback.
-- PostgreSQL is used by the Compose network and its port is not published directly to the host in the supplied Compose file.
-- Store real database credentials in the local `ansible/.env` file and keep that file out of version control. If credentials have ever been committed to a public repository, remove them from the repository and rotate them; adding a file to `.gitignore` does not remove a file that Git already tracks.
-- The Ansible playbook writes the remote environment file with restrictive permissions (`0600`).
-- Access to the Docker socket gives the Jenkins container substantial control over the Docker host.
+-   Do not commit `ansible/.env` or any file containing real
+    credentials.
+-   Use a strong, unique PostgreSQL password in the local environment
+    file.
+-   Store the GitHub token in Jenkins Credentials, not in source code.
+-   The Jenkins Docker socket grants the Jenkins process powerful access
+    to the Docker host. This is suitable for a controlled lab
+    environment, but should be carefully restricted in shared or
+    production environments.
+-   Removing the Compose stack with `down -v` deletes the persistent
+    PostgreSQL volume.
 
-## What this project demonstrates
+## Assignment summary
 
-- Building a Python web application that persists data in PostgreSQL.
-- Creating and running application and database containers with Docker Compose.
-- Defining a CI pipeline with Jenkins and a reusable Shared Library.
-- Running automated integration tests as part of the pipeline.
-- Packaging and archiving a build artifact.
-- Provisioning Docker and deploying an application to a remote Linux host with Ansible.
-- Writing a Bash utility that identifies and extracts several archive formats.
+This project demonstrates:
+
+-   CI/CD pipeline creation with Jenkins.
+-   Reusable pipeline logic through a Groovy Shared Library.
+-   SCM polling and commit metadata collection.
+-   Application build, integration testing, artifact packaging, and
+    release upload.
+-   Containerized application deployment with Docker Compose.
+-   Infrastructure automation with Ansible.
+-   Persistent application state using PostgreSQL.
+-   Bash scripting for archive detection and extraction.
 
 ## What I would improve next
 
