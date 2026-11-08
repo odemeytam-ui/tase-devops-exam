@@ -1,4 +1,4 @@
-def call() {
+def call(Map scmParams = [:]) {
     echo "Preparing pipeline environment..."
 
     // Get information about the latest Git commit

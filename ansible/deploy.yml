@@ -140,7 +140,7 @@
     # Verify that the application is responding.
     - name: Verify application health endpoint
       ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ web_port | default(8080) }}/health"
+        url: "http://127.0.0.1:5000/health"
         method: GET
         status_code: 200
       register: health_check
