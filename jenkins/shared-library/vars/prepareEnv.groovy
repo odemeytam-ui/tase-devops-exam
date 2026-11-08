@@ -1,7 +1,7 @@
 def call() {
     echo "Preparing pipeline environment..."
 
-    // Get information about the checked-out commit
+    // Get information about the latest Git commit
     def commitId = sh(
         script: 'git rev-parse HEAD',
         returnStdout: true
@@ -22,21 +22,21 @@ def call() {
         returnStdout: true
     ).trim()
 
-    // Expose SCM information to the Jenkins pipeline
+    // Store information as Jenkins environment variables
     env.SCM_COMMIT_ID = commitId
     env.SCM_COMMITTER = committer
     env.SCM_COMMITTER_EMAIL = committerEmail
     env.SCM_COMMIT_MESSAGE = commitMessage
 
     echo """
-    SCM information:
-    Commit ID: ${env.SCM_COMMIT_ID}
-    Committer: ${env.SCM_COMMITTER}
-    Email: ${env.SCM_COMMITTER_EMAIL}
-    Message: ${env.SCM_COMMIT_MESSAGE}
+    SCM Information:
+    ----------------
+    Commit ID: ${commitId}
+    Committer: ${committer}
+    Email: ${committerEmail}
+    Message: ${commitMessage}
     """
 
-    // Return the information as a map as well
     return [
         commitId       : commitId,
         committer      : committer,
